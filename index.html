@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parametrisierte Flächen – WebGL</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 16px/1.55 system-ui, sans-serif;
+      background: #0e1118;
+      color: #e6e9f0;
+    }
+    header, main, footer { max-width: 1000px; margin: auto; padding: 0 1rem; }
+    header { padding-top: 1.5rem; }
+    h1 { font-size: 1.7rem; margin: .2rem 0; }
+    h2 { margin-top: 2rem; font-size: 1.2rem; border-bottom: 1px solid #2a3245; }
+    .sub, .muted, footer { color: #98a2b5; }
+    .stage { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+    canvas {
+      width: 100%; max-width: 560px; aspect-ratio: 1;
+      background: #101522; border: 1px solid #2a3245;
+      border-radius: 12px; cursor: grab; touch-action: none;
+    }
+    canvas:active { cursor: grabbing; }
+    .side { flex: 1 1 280px; padding: 1rem; background: #171c27; border: 1px solid #2a3245; border-radius: 12px; }
+    .side h3 { margin: .1rem 0 .4rem; }
+    .hint { margin: 0; font-size: .9rem; }
+    .btns { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0; }
+    button, kbd { color: inherit; background: #232b3d; border: 1px solid #2a3245; border-radius: 6px; }
+    button { padding: .5rem .8rem; font: inherit; cursor: pointer; }
+    button:hover, button.active { border-color: #6ea8ff; }
+    button.active { background: #2b4a7a; }
+    code { padding: .05rem .3rem; background: #0b0e15; border-radius: 4px; font-size: .9em; }
+    a { color: #6ea8ff; }
+    table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    th, td { padding: .5rem; text-align: left; vertical-align: top; border-bottom: 1px solid #2a3245; }
+    kbd { padding: 0 .35rem; }
+    .own { color: #ffd479; font-weight: 600; }
+    #err { display: none; margin-top: 1rem; padding: 1rem; background: #5a1d1d; border-radius: 8px; }
+    footer { margin: 2rem auto; font-size: .85rem; }
+    @media (max-width: 600px) { table { display: block; overflow-x: auto; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Parametrisierte Flächen algorithmisch erzeugen</h1>
+  <p class="sub">WebGL ohne Kamera: Koordinaten direkt in NDC, Vertices werden automatisch in den Würfel [−1, 1]³ skaliert.</p>
+</header>
+
+<main>
+  <div class="stage">
+    <canvas id="gl" width="800" height="800" aria-label="3D-Darstellung der parametrisierten Fläche"></canvas>
+    <div class="side">
+      <h3 id="sName">–</h3>
+      <div id="sInfo" class="muted"></div>
+      <div class="btns">
+        <button id="btnNext" title="Taste B">Fläche wechseln (B)</button>
+        <button id="btnMode" title="Taste L">Darstellung: Linien + Füllung (L)</button>
+        <button id="btnRot" title="Taste R" class="active">Auto-Rotation (R)</button>
+      </div>
+      <div class="btns" id="surfBtns"></div>
+      <p class="muted hint">Mit der Maus (oder dem Finger) ziehen, um die Fläche zu drehen.</p>
+    </div>
+  </div>
+  <div id="err"></div>
+
+  <h2>Benutzungshinweise</h2>
+  <ul>
+    <li><kbd>B</kbd> oder Button „Fläche wechseln“: nächste Fläche anzeigen (3 Flächen, werden nacheinander gezeigt).</li>
+    <li><kbd>L</kbd> oder Button „Darstellung“: Umschalten zwischen <em>Linien + Füllung</em>, <em>nur Füllung</em> und <em>nur Linien</em>.</li>
+    <li><kbd>R</kbd>: Auto-Rotation an/aus. Ziehen mit der Maus dreht das Objekt manuell.</li>
+    <li>Es gibt keine Kamera und keine Projektionsmatrix; die Drehung erfolgt im Vertex-Shader, die Skalierung (Faktor 0,9 bezogen auf den größten Abstand vom Mittelpunkt) bereits beim Erzeugen der Vertices, damit alle Punkte im Viewing-Volumen bleiben.</li>
+  </ul>
+
+  <h2>Verwendete Flächen und Formeln</h2>
+  <table>
+    <thead><tr><th>Fläche</th><th>Parametrisierung</th><th>Quelle</th></tr></thead>
+    <tbody>
+    <tr>
+      <td><strong>1. Dini-Fläche</strong></td>
+      <td>
+        <code>x = a·cos u·sin v</code><br>
+        <code>y = a·sin u·sin v</code><br>
+        <code>z = a·(cos v + ln tan(v/2)) + b·u</code><br>
+        a = 1, b = 0,2; u ∈ [0, 4π], v ∈ [0,1; 1,7]
+      </td>
+      <td><a href="http://www.3d-meier.de/tut3/Seite0.html" target="_blank" rel="noopener">3d-meier.de – Flächen-Übersicht</a></td>
+    </tr>
+    <tr>
+      <td><strong>2. Muschel (Seashell)</strong></td>
+      <td>
+        <code>x = 2·(1 − e<sup>u/(6π)</sup>)·cos(n·u)·cos²(v/2)</code><br>
+        <code>y = 2·(−1 + e<sup>u/(6π)</sup>)·sin(n·u)·cos²(v/2)</code><br>
+        <code>z = 1 − e<sup>u/(3π)</sup> − sin v + e<sup>u/(6π)</sup>·sin v</code><br>
+        n = 1; u ∈ [0, 6π], v ∈ [0, 2π]
+      </td>
+      <td><a href="http://www.3d-meier.de/tut3/Seite0.html" target="_blank" rel="noopener">3d-meier.de – Flächen-Übersicht</a>; Testen von Formeln: <a href="https://stemkoski.github.io/Three.js/Graphulus-Surface.html" target="_blank" rel="noopener">Graphulus Surface</a></td>
+    </tr>
+    <tr>
+      <td><strong class="own">3. Qualle – eigene Kreation</strong></td>
+      <td>
+        Besteht aus zwei Teilflächen:<br><br>
+        <strong>Glocke</strong> (u ∈ [0, 2π], v ∈ [0, π/2]):<br>
+        <code>R = sin v · (1 + 0,10·sin(10u)·sin⁶v)</code><br>
+        <code>x = R·cos u,  y = R·sin u</code><br>
+        <code>z = 0,9·cos v − 0,12·sin⁶v·(1 + sin 10u)</code><br><br>
+        <strong>Fangarm-Vorhang</strong> (u ∈ [0, 2π], t ∈ [0, 1]):<br>
+        <code>r = (0,62 − 0,35·t)·(1 + 0,18·sin(7u + 6t))</code><br>
+        <code>x = r·cos u,  y = r·sin u,  z = −0,05 − 1,6·t</code>
+      </td>
+      <td>Eigene Entwicklung. Idee: Rotationsfläche (Kugelkappe) mit einem Term <code>sin(10u)·sin⁶v</code>, der nur am Rand wirkt und so den gewellten Glockenrand erzeugt. Der Vorhang mischt eine linear verengende Kreisform mit einer Welle <code>sin(7u + 6t)</code>, die sich mit t verschiebt (Verdrehung der Falten).</td>
+    </tr>
+    </tbody>
+  </table>
+
+  <h2>Kolorierung</h2>
+  <ul>
+    <li><strong>Dini:</strong> Farbton (HSV) läuft entlang des Parameters u über die Spirale von Blau über Violett nach Orange, die Helligkeit nimmt mit v zu.</li>
+    <li><strong>Muschel:</strong> Verlauf von Creme/Rosa an der Mündung (kleines u) nach Orange-Braun am Gehäusekern, dazu Querstreifen in v.</li>
+    <li><strong>Qualle:</strong> Glocke mit Verlauf von Rosa-Violett (Scheitel) nach Cyan (Rand) plus Rippen entlang u; Fangarme von Cyan nach Magenta.</li>
+    <li>Alle gefüllten Flächen werden mit einem einfachen Lambert-Licht (Normalen aus den Gitterflächen berechnet, beidseitig beleuchtet) schattiert; die Gitterlinien bleiben sichtbar.</li>
+  </ul>
+
+  <h2>Test und QA</h2>
+  <p>Interaktionen (B, L, R, Buttons, Maus-Drehung) und die Browser-Konsole (keine Fehlermeldungen) wurden in Chrome geprüft. Die Seite fängt fehlendes WebGL oder Shader-Fehler ab und zeigt eine Meldung an.</p>
+</main>
+
+<footer>Quellen: 3d-meier.de (Formelsammlung), stemkoski.github.io/Three.js/Graphulus-Surface.html (Formeltest). Eigene Kreation: Qualle (siehe Tabelle).</footer>
+
+<script>
+  "use strict";
+  (function () {
+    const canvas = document.getElementById('gl');
+    const errBox = document.getElementById('err');
+    function fail(msg) { errBox.style.display = 'block'; errBox.textContent = msg; console.error(msg); }
+
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl) { fail('WebGL wird von diesem Browser nicht unterstützt.'); return; }
+
+    /* ---------- Shader ---------- */
+    const VS = `
+    attribute vec3 aPos; attribute vec3 aNor; attribute vec3 aCol;
+    uniform vec2 uAng;
+    varying vec3 vNor; varying vec3 vCol;
+    vec3 rot(vec3 p) {
+      float cx = cos(uAng.x), sx = sin(uAng.x), cy = cos(uAng.y), sy = sin(uAng.y);
+      p = vec3(p.x, cx*p.y - sx*p.z, sx*p.y + cx*p.z);
+      p = vec3(cy*p.x + sy*p.z, p.y, -sy*p.x + cy*p.z);
+      return p;
+    }
+    void main() {
+      vNor = rot(aNor); vCol = aCol;
+      gl_Position = vec4(rot(aPos), 1.0);   // Positionen liegen bereits in NDC (Radius <= 0.9)
+    }`;
+    const FS = `
+    precision mediump float;
+    varying vec3 vNor; varying vec3 vCol;
+    uniform int uMode;   // 0 = gefuellt, 1 = dunkle Linie, 2 = farbige Linie
+    void main() {
+      if (uMode == 1) { gl_FragColor = vec4(0.03, 0.04, 0.08, 0.55); return; }
+      if (uMode == 2) { gl_FragColor = vec4(vCol, 1.0); return; }
+      vec3 n = normalize(vNor);
+      vec3 l = normalize(vec3(0.4, 0.6, 0.8));
+      float d = abs(dot(n, l));
+      float s = pow(abs(dot(n, normalize(l + vec3(0.0, 0.0, 1.0)))), 40.0);
+      vec3 c = vCol * (0.30 + 0.70 * d) + 0.25 * s;
+      gl_FragColor = vec4(c, 1.0);
+    }`;
+    function compile(type, src) {
+      const sh = gl.createShader(type);
+      gl.shaderSource(sh, src); gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+      return sh;
+    }
+    let prog;
+    try {
+      prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    } catch (e) { fail('Shader-Fehler: ' + e.message); return; }
+    gl.useProgram(prog);
+    const aPos = gl.getAttribLocation(prog, 'aPos');
+    const aNor = gl.getAttribLocation(prog, 'aNor');
+    const aCol = gl.getAttribLocation(prog, 'aCol');
+    const uAng = gl.getUniformLocation(prog, 'uAng');
+    const uMode = gl.getUniformLocation(prog, 'uMode');
+
+    /* ---------- Farb-Helfer ---------- */
+    const mix = (a, b, t) => [a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t, a[2] + (b[2]-a[2])*t];
+    function hsv(h, s, v) {
+      h = ((h % 1) + 1) % 1;
+      const i = Math.floor(h*6), f = h*6 - i;
+      const p = v*(1-s), q = v*(1-f*s), t = v*(1-(1-f)*s);
+      return [[v,t,p],[q,v,p],[p,v,t],[p,q,v],[t,p,v],[v,p,q]][i % 6];
+    }
+    const clamp01 = x => Math.max(0, Math.min(1, x));
+
+    /* ---------- Flächen-Definitionen ----------
+       f(u,v) -> [x,y,z];  color(s,t,u,v) mit s,t in [0,1] (normierte Parameter) */
+    const PI = Math.PI;
+    const surfaces = [
+      {
+        name: 'Dini-Fläche',
+        info: 'Schraubenförmig aufgewickelte Pseudosphäre (konstante negative Krümmung). Farbton läuft entlang u, Helligkeit mit v.',
+        parts: [{
+          u0: 0, u1: 4*PI, v0: 0.1, v1: 1.7, nu: 200, nv: 40, lsU: 4, lsV: 4,
+          f: (u, v) => { const a = 1, b = 0.2;
+            return [a*Math.cos(u)*Math.sin(v), a*Math.sin(u)*Math.sin(v),
+              a*(Math.cos(v) + Math.log(Math.tan(v/2))) + b*u]; },
+          color: (s, t) => hsv(0.62 - 0.62*s, 0.75, 0.55 + 0.45*t)
+        }]
+      },
+      {
+        name: 'Muschel (Seashell)',
+        info: 'Spiralförmig wachsendes Gehäuse (exponentielles Wachstum in u). Verlauf von der Mündung zum Kern mit Querstreifen.',
+        parts: [{
+          u0: 0, u1: 6*PI, v0: 0, v1: 2*PI, nu: 200, nv: 48, lsU: 5, lsV: 4,
+          f: (u, v) => { const n = 1, e1 = Math.exp(u/(6*PI)), e2 = Math.exp(u/(3*PI)), c = Math.cos(v/2);
+            return [2*(1 - e1)*Math.cos(n*u)*c*c, 2*(-1 + e1)*Math.sin(n*u)*c*c,
+              1 - e2 - Math.sin(v) + e1*Math.sin(v)]; },
+          color: (s, t) => {
+            const base = mix([1.0, 0.82, 0.78], [0.85, 0.38, 0.12], Math.pow(s, 0.8));
+            const stripe = 0.82 + 0.18*Math.cos(t * 2*PI * 3);
+            return [base[0]*stripe, base[1]*stripe, base[2]*stripe];
+          }
+        }]
+      },
+      {
+        name: 'Qualle (eigene Kreation)',
+        info: 'Eigene Parametrisierung: gewellte Glocke + verdrehter Fangarm-Vorhang. Formeln siehe Tabelle unten.',
+        parts: [
+          { // Glocke
+            u0: 0, u1: 2*PI, v0: 0, v1: PI/2, nu: 160, nv: 32, lsU: 4, lsV: 2,
+            f: (u, v) => {
+              const s6 = Math.pow(Math.sin(v), 6);
+              const R = Math.sin(v) * (1 + 0.10*Math.sin(10*u)*s6);
+              return [R*Math.cos(u), R*Math.sin(u), 0.9*Math.cos(v) - 0.12*s6*(1 + Math.sin(10*u))];
+            },
+            color: (s, t, u, v) => {
+              const base = mix([0.95, 0.55, 0.9], [0.25, 0.85, 0.95], Math.pow(t, 1.3));
+              const rib = 0.85 + 0.15*Math.sin(10*u);
+              return [base[0]*rib, base[1]*rib, base[2]*rib];
+            }
+          },
+          { // Fangarm-Vorhang
+            u0: 0, u1: 2*PI, v0: 0, v1: 1, nu: 160, nv: 40, lsU: 4, lsV: 4,
+            f: (u, t) => {
+              const r = (0.62 - 0.35*t) * (1 + 0.18*Math.sin(7*u + 6*t));
+              return [r*Math.cos(u), r*Math.sin(u), -0.05 - 1.6*t];
+            },
+            color: (s, t) => mix([0.3, 0.85, 0.95], [0.9, 0.25, 0.75], t)
+          }
+        ]
+      }
+    ];
+
+    /* ---------- Gitter erzeugen, normieren, Normalen, Buffer ---------- */
+    function buildSurface(sf) {
+      // 1) Rohpositionen aller Teile; z als "oben" -> y tauschen
+      for (const p of sf.parts) {
+        const W = p.nu + 1, H = p.nv + 1;
+        p.W = W; p.H = H;
+        p.pos = new Float32Array(W*H*3);
+        p.col = new Float32Array(W*H*3);
+        for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+          const s = i / p.nu, t = j / p.nv;
+          const u = p.u0 + s*(p.u1 - p.u0), v = p.v0 + t*(p.v1 - p.v0);
+          const q = p.f(u, v);
+          const k = (j*W + i)*3;
+          p.pos[k] = q[0]; p.pos[k+1] = q[2]; p.pos[k+2] = q[1];
+          const c = p.color(s, t, u, v);
+          p.col[k] = clamp01(c[0]); p.col[k+1] = clamp01(c[1]); p.col[k+2] = clamp01(c[2]);
+        }
+      }
+      // 2) gemeinsame Normierung: Mittelpunkt der Bounding-Box, max. Radius -> 0.9
+      const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+      for (const p of sf.parts) for (let k = 0; k < p.pos.length; k++) {
+        const a = k % 3; if (p.pos[k] < mn[a]) mn[a] = p.pos[k]; if (p.pos[k] > mx[a]) mx[a] = p.pos[k];
+      }
+      const cen = [0,1,2].map(a => (mn[a] + mx[a]) / 2);
+      let rmax = 0;
+      for (const p of sf.parts) for (let k = 0; k < p.pos.length; k += 3) {
+        const dx = p.pos[k]-cen[0], dy = p.pos[k+1]-cen[1], dz = p.pos[k+2]-cen[2];
+        rmax = Math.max(rmax, Math.hypot(dx, dy, dz));
+      }
+      const c = 0.9 / rmax;
+      for (const p of sf.parts) {
+        for (let k = 0; k < p.pos.length; k++) p.pos[k] = (p.pos[k] - cen[k % 3]) * c;
+        // 3) Indizes
+        const tri = [], lin = [];
+        const idx = (i, j) => j*p.W + i;
+        for (let j = 0; j < p.nv; j++) for (let i = 0; i < p.nu; i++) {
+          const a = idx(i,j), b = idx(i+1,j), d = idx(i,j+1), e = idx(i+1,j+1);
+          tri.push(a, b, d, b, e, d);
+        }
+        for (let j = 0; j <= p.nv; j += p.lsV) for (let i = 0; i < p.nu; i++) lin.push(idx(i,j), idx(i+1,j));
+        for (let i = 0; i <= p.nu; i += p.lsU) for (let j = 0; j < p.nv; j++) lin.push(idx(i,j), idx(i,j+1));
+        // 4) Normalen (Summe der Flächennormalen)
+        const nor = new Float32Array(p.pos.length);
+        for (let t = 0; t < tri.length; t += 3) {
+          const A = tri[t]*3, B = tri[t+1]*3, C = tri[t+2]*3;
+          const ux = p.pos[B]-p.pos[A], uy = p.pos[B+1]-p.pos[A+1], uz = p.pos[B+2]-p.pos[A+2];
+          const vx = p.pos[C]-p.pos[A], vy = p.pos[C+1]-p.pos[A+1], vz = p.pos[C+2]-p.pos[A+2];
+          const nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
+          for (const K of [A, B, C]) { nor[K] += nx; nor[K+1] += ny; nor[K+2] += nz; }
+        }
+        for (let k = 0; k < nor.length; k += 3) {
+          const l = Math.hypot(nor[k], nor[k+1], nor[k+2]) || 1;
+          nor[k] /= l; nor[k+1] /= l; nor[k+2] /= l;
+        }
+        // 5) GPU-Buffer (interleaved: pos, nor, col)
+        const n = p.pos.length / 3, data = new Float32Array(n*9);
+        for (let v = 0; v < n; v++) for (let a = 0; a < 3; a++) {
+          data[v*9 + a] = p.pos[v*3 + a];
+          data[v*9 + 3 + a] = nor[v*3 + a];
+          data[v*9 + 6 + a] = p.col[v*3 + a];
+        }
+        p.vbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, p.vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+        p.ibTri = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, p.ibTri);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(tri), gl.STATIC_DRAW);
+        p.nTri = tri.length;
+        p.ibLin = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, p.ibLin);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(lin), gl.STATIC_DRAW);
+        p.nLin = lin.length;
+        delete p.pos; delete p.col;
+      }
+    }
+    try { surfaces.forEach(buildSurface); }
+    catch (e) { fail('Fehler beim Erzeugen der Flächen: ' + e.message); return; }
+
+    /* ---------- Zustand & UI ---------- */
+    let cur = 0, mode = 0, auto = true, rx = 0.35, ry = 0.6;
+    const modeNames = ['Linien + Füllung', 'nur Füllung', 'nur Linien'];
+    const $ = id => document.getElementById(id);
+
+    function updateUI() {
+      $('sName').textContent = (cur + 1) + '/' + surfaces.length + ' – ' + surfaces[cur].name;
+      $('sName').className = cur === 2 ? 'own' : '';
+      $('sInfo').textContent = surfaces[cur].info;
+      $('btnMode').textContent = 'Darstellung: ' + modeNames[mode] + ' (L)';
+      $('btnRot').classList.toggle('active', auto);
+      [...$('surfBtns').children].forEach((b, i) => b.classList.toggle('active', i === cur));
+    }
+    surfaces.forEach((s, i) => {
+      const b = document.createElement('button'); b.textContent = (i+1) + '. ' + s.name.split(' (')[0];
+      b.onclick = () => { cur = i; updateUI(); }; $('surfBtns').appendChild(b);
+    });
+    const next = () => { cur = (cur + 1) % surfaces.length; updateUI(); };
+    const nextMode = () => { mode = (mode + 1) % 3; updateUI(); };
+    const toggleRot = () => { auto = !auto; updateUI(); };
+    $('btnNext').onclick = next; $('btnMode').onclick = nextMode; $('btnRot').onclick = toggleRot;
+    window.addEventListener('keydown', e => {
+      const k = e.key.toLowerCase();
+      if (k === 'b') next(); else if (k === 'l') nextMode(); else if (k === 'r') toggleRot();
+    });
+
+    // Maus/Touch-Drehung
+    let drag = null;
+    canvas.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener('pointerup', () => drag = null);
+    canvas.addEventListener('pointermove', e => {
+      if (!drag) return;
+      ry += (e.clientX - drag[0]) * 0.01; rx += (e.clientY - drag[1]) * 0.01;
+      rx = Math.max(-1.6, Math.min(1.6, rx));
+      drag = [e.clientX, e.clientY];
+    });
+
+    /* ---------- Zeichnen ---------- */
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1, 1);
+    gl.clearColor(0, 0, 0, 0);
+
+    function bindPart(p, ib) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, p.vbo);
+      gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 36, 0);
+      gl.enableVertexAttribArray(aNor); gl.vertexAttribPointer(aNor, 3, gl.FLOAT, false, 36, 12);
+      gl.enableVertexAttribArray(aCol); gl.vertexAttribPointer(aCol, 3, gl.FLOAT, false, 36, 24);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    }
+    function frame() {
+      if (auto && !drag) ry += 0.006;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.uniform2f(uAng, rx, ry);
+      for (const p of surfaces[cur].parts) {
+        if (mode !== 2) { bindPart(p, p.ibTri); gl.uniform1i(uMode, 0); gl.drawElements(gl.TRIANGLES, p.nTri, gl.UNSIGNED_SHORT, 0); }
+        if (mode !== 1) { bindPart(p, p.ibLin); gl.uniform1i(uMode, mode === 0 ? 1 : 2); gl.drawElements(gl.LINES, p.nLin, gl.UNSIGNED_SHORT, 0); }
+      }
+      const e = gl.getError(); if (e !== gl.NO_ERROR) console.warn('GL error', e);
+      requestAnimationFrame(frame);
+    }
+    updateUI();
+    requestAnimationFrame(frame);
+  })();
+</script>
+</body>
+</html>
+
+```
